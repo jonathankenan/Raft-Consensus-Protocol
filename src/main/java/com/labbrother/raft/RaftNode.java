@@ -249,6 +249,30 @@ public class RaftNode implements RpcService {
     // [AREA ANGGOTA 2] LOG REPLICATION & EXECUTION (PERLU DIKERJAKAN)
     // ==============================================================================
 
+    private List<LogEntry> convertToLogEntries(Object entriesObject) {
+        if (entriesObject == null) {
+            return null;
+        }
+        
+        List<LogEntry> logEntries = new ArrayList<>();
+        
+        try {
+            List<Map<String, Object>> rawList = (List<Map<String, Object>>) entriesObject;
+            
+            for (Map<String, Object> map : rawList) {
+                int term = (Integer) map.get("term");
+                String command = (String) map.get("command");
+                logEntries.add(new LogEntry(term, command));
+            }
+            
+            return logEntries;
+            
+        } catch (Exception e) {
+            System.err.println("Error converting entries: " + e.getMessage());
+            return null;
+        }
+    }
+ 
     @Override
     public synchronized Message appendEntries(Message request) {
         // [FIX INVISIBLE FOLLOWER]: Kenalan dulu kalau belum kenal
@@ -290,7 +314,7 @@ public class RaftNode implements RpcService {
             int prevLogTerm = (int) payloadMap.getOrDefault("prevLogTerm", 0);
             
             // Ambil Entri Log yang akan ditambahkan
-            List<LogEntry> newEntries = (List<LogEntry>) payloadMap.get("entries");
+            List<LogEntry> newEntries = convertToLogEntries(payloadMap.get("entries"));
             
             System.out.println(myAddress + " [AE] Log diterima. Prev Index: " + prevLogIndex + 
                                " | Entries baru: " + (newEntries == null ? 0 : newEntries.size()));
