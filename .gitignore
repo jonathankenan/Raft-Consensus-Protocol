@@ -1,0 +1,28 @@
+# Maven / Java
+/target/
+/target/dependency/
+target/
+
+# IDEs
+/.idea/
+*.iml
+/.vscode/
+/.classpath
+/.project
+.settings/
+
+# Compiled class files
+*.class
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# IntelliJ
+out/
+
