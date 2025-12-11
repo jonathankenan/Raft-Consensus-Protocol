@@ -46,6 +46,7 @@ public class RaftNode implements RpcService {
     private ScheduledFuture<?> electionTimerTask;
     private ScheduledFuture<?> heartbeatTimerTask;
     private Random random;
+    private Map<Integer, String> executionResults = new ConcurrentHashMap<>();
 
     // Konstanta Waktu (dalam milidetik)
     private static final int HEARTBEAT_INTERVAL = 1000; 
@@ -397,6 +398,9 @@ public class RaftNode implements RpcService {
             
             // Lakukan parsing dan eksekusi command pada StateMachine (KVStore)
             String result = parseAndExecuteCommand(entry.getCommand());
+
+            // Simpan hasil eksekusi untuk diambil oleh execute()
+            executionResults.put(lastApplied, result);
             
             // Log aksi yang diterapkan
             System.out.println(myAddress + " [APPLY] Log Index " + lastApplied + " (Term " + entry.getTerm() + 
@@ -405,6 +409,9 @@ public class RaftNode implements RpcService {
             // Catatan: Jika ini adalah command GET/PING, hasilnya (result) diabaikan 
             // karena log hanya untuk operasi yang mengubah state (SET, APPEND, DEL).
         }
+
+        // Notify waiting threads
+        this.notifyAll();
     }
 
 
@@ -467,8 +474,8 @@ public class RaftNode implements RpcService {
             String commandString = (String) request.getPayload();
             String command = commandString.trim().split("\\s+", 2)[0].toLowerCase();
             
-            // Jika PING, langsung eksekusi tanpa log replication (sesuai spesifikasi tugas)
-            if (command.equals("ping")) {
+            // Jika PING, GET, langsung eksekusi tanpa log replication
+            if (command.equals("ping") || command.equals("get") || command.equals("strln")) {
                 String result = parseAndExecuteCommand(commandString);
                 Message response = new Message("EXECUTE_RESPONSE", myAddress, currentTerm, result);
                 response.setStatus("OK"); 
@@ -477,6 +484,7 @@ public class RaftNode implements RpcService {
             
             // 2. Buat LogEntry baru dan tambahkan secara lokal
             LogEntry newEntry = new LogEntry(currentTerm, commandString);
+            int newLogIndex = log.size();
             log.add(newEntry);
             System.out.println(myAddress + " [Execute] Log baru ditambahkan secara lokal: " + newEntry.toString());
             
@@ -523,8 +531,22 @@ public class RaftNode implements RpcService {
             // 5. Apply Log dan Respon
             if (majorityReached) {
                 updateCommitIndex();
-                String finalResult = parseAndExecuteCommand(commandString);
-                Message response = new Message("EXECUTE_RESPONSE", myAddress, currentTerm, finalResult);
+
+                // Tunggu sampai log ini ter-apply
+                long waitStart = System.currentTimeMillis();
+                while (lastApplied < newLogIndex && (System.currentTimeMillis() - waitStart) < 1000) {
+                    try {
+                        this.wait(50);
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
+
+                // Ambil hasil dari cache (sudah dieksekusi di applyLogToStateMachine)
+                String result = executionResults.getOrDefault(newLogIndex, "OK");
+                executionResults.remove(newLogIndex); // Cleanup
+                
+                Message response = new Message("EXECUTE_RESPONSE", myAddress, currentTerm, result);
                 response.setStatus("OK"); // [TAMBAHAN]
                 return response;
             } else {
