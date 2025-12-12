@@ -250,10 +250,18 @@ public class RaftNode implements RpcService {
         boolean voteGranted = false;
         
         // --- Ambil Log Details dari Kandidat ---
-        Map<String, Integer> candidateLog = (Map<String, Integer>) request.getPayload();
-        int candidateLastLogIndex = candidateLog.getOrDefault("lastLogIndex", -1);
-        int candidateLastLogTerm = candidateLog.getOrDefault("lastLogTerm", 0);
+        int candidateLastLogIndex = -1;
+        int candidateLastLogTerm = 0;
 
+        if (request.getPayload() != null) {
+            Map<String, Integer> candidateLog = (Map<String, Integer>) request.getPayload();
+            candidateLastLogIndex = candidateLog.getOrDefault("lastLogIndex", -1);
+            candidateLastLogTerm = candidateLog.getOrDefault("lastLogTerm", 0);
+        } else {
+            // Jika payload null, anggap kandidat memiliki log kosong
+            System.out.println(myAddress + " [RequestVote] WARNING: Null payload from " + 
+                            request.getSender() + ", assuming empty log");
+        }
 
         if (candidateTerm == currentTerm && (votedFor == null || votedFor.equals(candidateAddress))) {
             if (isLogUpToDate(candidateLastLogIndex, candidateLastLogTerm)) { 
