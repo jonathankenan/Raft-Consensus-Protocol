@@ -124,11 +124,31 @@ public class Client {
                 }
 
                 String status = response.getStatus();
+                String responseType = response.getType();
+
+                // Handle NULL status atau gunakan responseType sebagai fallback
+                if (status == null && "REDIRECT".equals(responseType)) {
+                    status = "REDIRECT";
+                }
                 
                 // Cek jika disuruh Redirect (Nanti berguna kalau ada banyak node)
-                if ("REDIRECT".equals(status)) {
+                if ("REDIRECT".equals(status) || "REDIRECT".equals(responseType)) {
                     // Server bukan Leader, redirect ke Leader
-                    Address leaderAddress = (Address) response.getPayload();
+                    // Payload bisa berupa Address object atau LinkedHashMap
+                    Address leaderAddress = null;
+
+                    Object payload = response.getPayload();
+                    if (payload instanceof Address) {
+                        leaderAddress = (Address) payload;
+                    } else if (payload instanceof Map) {
+                        // Deserialize dari LinkedHashMap
+                        Map<String, Object> map = (Map<String, Object>) payload;
+                        String ip = (String) map.get("ip");
+                        Integer port = (Integer) map.get("port");
+                        if (ip != null && port != null) {
+                            leaderAddress = new Address(ip, port);
+                        }
+                    }
                     
                     if (leaderAddress == null) {
                         System.out.println("ERROR: Leader tidak diketahui. Cluster mungkin sedang election.");
@@ -147,7 +167,7 @@ public class Client {
                     // Retry request ke Leader baru
                     continue;
                     
-                } else if ("OK".equals(status)) {
+                } else if ("OK".equals(status) || response.getPayload() != null) {
                     // Sukses
                     Object payload = response.getPayload();
                     
@@ -171,7 +191,10 @@ public class Client {
                     return;
                     
                 } else {
-                    System.out.println("ERROR: Status tidak diketahui: " + status);
+                    System.out.println("ERROR: Status tidak diketahui: " + status + " (tipe: " + responseType + ")");
+                    if (response.getPayload() != null) {
+                        System.out.println("  Payload: " + response.getPayload());
+                    }
                     return;
                 }
 
@@ -207,7 +230,20 @@ public class Client {
                 String responseType = response.getType();
                 
                 if ("REDIRECT".equals(responseType)) {
-                    Address leaderAddress = (Address) response.getPayload();
+                    Address leaderAddress = null;
+
+                    Object payload = response.getPayload();
+                    if (payload instanceof Address) {
+                        leaderAddress = (Address) payload;
+                    } else if (payload instanceof Map) {
+                        // Deserialize dari LinkedHashMap
+                        Map<String, Object> map = (Map<String, Object>) payload;
+                        String ip = (String) map.get("ip");
+                        Integer port = (Integer) map.get("port");
+                        if (ip != null && port != null) {
+                            leaderAddress = new Address(ip, port);
+                        }
+                    }
                     
                     if (leaderAddress == null) {
                         System.out.println("ERROR: Leader tidak diketahui. Cluster mungkin sedang election.");

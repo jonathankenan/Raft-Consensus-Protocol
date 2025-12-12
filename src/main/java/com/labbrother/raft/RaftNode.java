@@ -49,9 +49,9 @@ public class RaftNode implements RpcService {
     private Map<Integer, String> executionResults = new ConcurrentHashMap<>();
 
     // Konstanta Waktu (dalam milidetik)
-    private static final int HEARTBEAT_INTERVAL = 1000; 
-    private static final int ELECTION_MIN_DELAY = 3000; 
-    private static final int ELECTION_MAX_DELAY = 6000; 
+    private static final int HEARTBEAT_INTERVAL = 500; 
+    private static final int ELECTION_MIN_DELAY = 1500; 
+    private static final int ELECTION_MAX_DELAY = 3000; 
 
     public RaftNode(Address myAddress, List<Address> peers) {
         this.myAddress = myAddress;
@@ -95,7 +95,10 @@ public class RaftNode implements RpcService {
     }
 
     private void runElection() {
-        if (state == NodeState.LEADER) return;
+        if (state == NodeState.LEADER) {
+            System.out.println(myAddress + " [Election] Saya sudah Leader, skip election");
+            return;
+        }
 
         // 1. Persiapan Diri
         synchronized(this) {
@@ -164,7 +167,7 @@ public class RaftNode implements RpcService {
         leaderAddress = myAddress;
         System.out.println("$$$ SAYA ADALAH LEADER $$$ Term: " + currentTerm);
 
-        // [TAMBAHAN]: Reset volatile state Leader
+        // Reset volatile state Leader
         nextIndex.clear();
         matchIndex.clear();
         int lastLogIndex = log.size(); // Index log selanjutnya (kosong)
@@ -174,7 +177,12 @@ public class RaftNode implements RpcService {
             matchIndex.put(peer, -1);
         }
 
-        if (electionTimerTask != null) electionTimerTask.cancel(false);
+        // Cancel election timer dengan proper null check
+        if (electionTimerTask != null && !electionTimerTask.isCancelled()) {
+            electionTimerTask.cancel(false);
+            electionTimerTask = null;
+        }
+
         startHeartbeat();
     }
     
@@ -183,6 +191,13 @@ public class RaftNode implements RpcService {
         state = NodeState.FOLLOWER;
         votedFor = null;
         leaderAddress = null;
+
+        // Cancel heartbeat timer jika ada
+        if (heartbeatTimerTask != null && !heartbeatTimerTask.isCancelled()) {
+            heartbeatTimerTask.cancel(false);
+            heartbeatTimerTask = null;
+        }
+
         resetElectionTimer();
         System.out.println("Mundur menjadi FOLLOWER. Term baru: " + currentTerm);
     }
@@ -195,11 +210,17 @@ public class RaftNode implements RpcService {
     }
 
     private void sendHeartbeat() {
+        if (state != NodeState.LEADER) return; // Double check
+
         System.out.println("[Leader] Mengirim Heartbeat...");
         for (Address peer : peers) {
             scheduler.submit(() -> {
-                // Panggil replicateLogToPeer dengan acksReceived = null (karena ini Heartbeat)
-                replicateLogToPeer(peer, null);
+                try {
+                    // Panggil replicateLogToPeer dengan acksReceived = null (karena ini Heartbeat)
+                    replicateLogToPeer(peer, null);
+                } catch (Exception e) {
+                    // Silent fail untuk heartbeat
+                }
             });
         }
     }
