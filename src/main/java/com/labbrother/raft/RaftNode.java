@@ -14,11 +14,14 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.googlecode.jsonrpc4j.JsonRpcHttpClient;
 import com.googlecode.jsonrpc4j.ProxyUtil;
 import com.labbrother.model.Address;
 import com.labbrother.model.LogEntry;
 import com.labbrother.model.Message;
+import com.labbrother.model.TransactionResult;
 import com.labbrother.network.RpcService;
 
 public class RaftNode implements RpcService {
@@ -27,19 +30,19 @@ public class RaftNode implements RpcService {
     private Address myAddress;
     private List<Address> peers;
     private NodeState state;
-    
+
     // --- 2. Persistent State ---
     private int currentTerm;
     private Address votedFor;
     private List<LogEntry> log;
-    
+
     // --- 3. Volatile State ---
     private int commitIndex;
     private int lastApplied;
     private Address leaderAddress;
 
     // --- 4. Komponen Pendukung ---
-    private Map<Address, Integer> nextIndex;  // Index log berikutnya yang akan dikirim ke follower
+    private Map<Address, Integer> nextIndex; // Index log berikutnya yang akan dikirim ke follower
     private Map<Address, Integer> matchIndex; // Index log tertinggi yang diketahui ter-replikasi di follower
     private StateMachine stateMachine;
     private ScheduledExecutorService scheduler;
@@ -49,9 +52,9 @@ public class RaftNode implements RpcService {
     private Map<Integer, String> executionResults = new ConcurrentHashMap<>();
 
     // Konstanta Waktu (dalam milidetik)
-    private static final int HEARTBEAT_INTERVAL = 500; 
-    private static final int ELECTION_MIN_DELAY = 1500; 
-    private static final int ELECTION_MAX_DELAY = 3000; 
+    private static final int HEARTBEAT_INTERVAL = 500;
+    private static final int ELECTION_MIN_DELAY = 1500;
+    private static final int ELECTION_MAX_DELAY = 3000;
 
     public RaftNode(Address myAddress, List<Address> peers) {
         this.myAddress = myAddress;
@@ -59,20 +62,19 @@ public class RaftNode implements RpcService {
         this.stateMachine = new StateMachine();
         this.log = new ArrayList<>();
         // Pool size 4 agar cukup untuk timer dan network call paralel
-        this.scheduler = Executors.newScheduledThreadPool(4); 
+        this.scheduler = Executors.newScheduledThreadPool(4);
         this.random = new Random();
-        
-        
+
         this.state = NodeState.FOLLOWER;
         this.currentTerm = 0;
         this.votedFor = null;
         this.commitIndex = -1;
         this.lastApplied = -1;
-        
+
         // Inisialisasi State Leader yang volatil
         this.nextIndex = new ConcurrentHashMap<>();
         this.matchIndex = new ConcurrentHashMap<>();
-        
+
         System.out.println("Node " + myAddress + " started. State: FOLLOWER");
     }
 
@@ -101,12 +103,12 @@ public class RaftNode implements RpcService {
         }
 
         // 1. Persiapan Diri
-        synchronized(this) {
+        synchronized (this) {
             state = NodeState.CANDIDATE;
             currentTerm++;
             votedFor = myAddress;
         }
-        
+
         System.out.println("!!! ELECTION STARTED !!! Term: " + currentTerm + " | Candidate: " + myAddress);
 
         // 2. Hitung Suara (Atomic biar aman diakses banyak thread)
@@ -128,14 +130,14 @@ public class RaftNode implements RpcService {
             scheduler.submit(() -> {
                 try {
                     RpcService peerProxy = getPeerProxy(peer);
-                    
+
                     // Payload diisi dengan Log Details untuk validasi penerima
                     Map<String, Integer> payload = new HashMap<>();
                     payload.put("lastLogIndex", myLastLogIndex);
                     payload.put("lastLogTerm", myLastLogTerm);
-                    
+
                     Message request = new Message("REQUEST_VOTE", myAddress, currentTerm, payload);
-                    
+
                     System.out.println(" -> Mengirim RequestVote ke " + peer);
                     Message response = peerProxy.requestVote(request);
 
@@ -155,13 +157,15 @@ public class RaftNode implements RpcService {
                 }
             });
         }
-        
-        // Reset timer, jika kalah election ini, timer akan habis dan mulai election baru
+
+        // Reset timer, jika kalah election ini, timer akan habis dan mulai election
+        // baru
         resetElectionTimer();
     }
 
     private synchronized void becomeLeader() {
-        if (state != NodeState.CANDIDATE) return;
+        if (state != NodeState.CANDIDATE)
+            return;
 
         state = NodeState.LEADER;
         leaderAddress = myAddress;
@@ -171,7 +175,7 @@ public class RaftNode implements RpcService {
         nextIndex.clear();
         matchIndex.clear();
         int lastLogIndex = log.size(); // Index log selanjutnya (kosong)
-        
+
         for (Address peer : peers) {
             nextIndex.put(peer, lastLogIndex);
             matchIndex.put(peer, -1);
@@ -185,7 +189,7 @@ public class RaftNode implements RpcService {
 
         startHeartbeat();
     }
-    
+
     private synchronized void stepDown(int newTerm) {
         currentTerm = newTerm;
         state = NodeState.FOLLOWER;
@@ -204,13 +208,15 @@ public class RaftNode implements RpcService {
 
     private void startHeartbeat() {
         heartbeatTimerTask = scheduler.scheduleAtFixedRate(() -> {
-            if (state != NodeState.LEADER) return;
+            if (state != NodeState.LEADER)
+                return;
             sendHeartbeat();
         }, 0, HEARTBEAT_INTERVAL, TimeUnit.MILLISECONDS);
     }
 
     private void sendHeartbeat() {
-        if (state != NodeState.LEADER) return; // Double check
+        if (state != NodeState.LEADER)
+            return; // Double check
 
         System.out.println("[Leader] Mengirim Heartbeat...");
         for (Address peer : peers) {
@@ -228,7 +234,7 @@ public class RaftNode implements RpcService {
     private RpcService getPeerProxy(Address address) throws Exception {
         URL url = new URL("http://" + address.getIp() + ":" + address.getPort() + "/");
         JsonRpcHttpClient client = new JsonRpcHttpClient(url);
-        client.setConnectionTimeoutMillis(500); 
+        client.setConnectionTimeoutMillis(500);
         client.setReadTimeoutMillis(500);
         return ProxyUtil.createClientProxy(getClass().getClassLoader(), RpcService.class, client);
     }
@@ -242,13 +248,13 @@ public class RaftNode implements RpcService {
 
         int candidateTerm = request.getTerm();
         Address candidateAddress = request.getSender();
-        
+
         if (candidateTerm > currentTerm) {
             stepDown(candidateTerm);
         }
-        
+
         boolean voteGranted = false;
-        
+
         // --- Ambil Log Details dari Kandidat ---
         int candidateLastLogIndex = -1;
         int candidateLastLogTerm = 0;
@@ -259,15 +265,15 @@ public class RaftNode implements RpcService {
             candidateLastLogTerm = candidateLog.getOrDefault("lastLogTerm", 0);
         } else {
             // Jika payload null, anggap kandidat memiliki log kosong
-            System.out.println(myAddress + " [RequestVote] WARNING: Null payload from " + 
-                            request.getSender() + ", assuming empty log");
+            System.out.println(myAddress + " [RequestVote] WARNING: Null payload from " +
+                    request.getSender() + ", assuming empty log");
         }
 
         if (candidateTerm == currentTerm && (votedFor == null || votedFor.equals(candidateAddress))) {
-            if (isLogUpToDate(candidateLastLogIndex, candidateLastLogTerm)) { 
+            if (isLogUpToDate(candidateLastLogIndex, candidateLastLogTerm)) {
                 voteGranted = true;
                 votedFor = candidateAddress;
-                resetElectionTimer(); 
+                resetElectionTimer();
                 System.out.println("Vote diberikan kepada " + candidateAddress);
             }
         }
@@ -283,50 +289,53 @@ public class RaftNode implements RpcService {
         if (entriesObject == null) {
             return null;
         }
-        
+
         List<LogEntry> logEntries = new ArrayList<>();
-        
+
         try {
             List<Map<String, Object>> rawList = (List<Map<String, Object>>) entriesObject;
-            
+
             for (Map<String, Object> map : rawList) {
                 int term = (Integer) map.get("term");
                 String command = (String) map.get("command");
                 logEntries.add(new LogEntry(term, command));
             }
-            
+
             return logEntries;
-            
+
         } catch (Exception e) {
             System.err.println("Error converting entries: " + e.getMessage());
             return null;
         }
     }
- 
+
     @Override
     public synchronized Message appendEntries(Message request) {
         // [FIX INVISIBLE FOLLOWER]: Kenalan dulu kalau belum kenal
         addPeer(request.getSender()); //
 
         int leaderTerm = request.getTerm();
-        
+
         // 1. Validasi Leader (Term Check)
         if (leaderTerm < currentTerm) {
             // Leader yang mengirim AppendEntries memiliki Term yang lebih kecil. Tolak.
-            System.out.println(myAddress + " [AE] Tolak dari Leader Term " + leaderTerm + ". Saya: Term " + currentTerm);
+            System.out
+                    .println(myAddress + " [AE] Tolak dari Leader Term " + leaderTerm + ". Saya: Term " + currentTerm);
             return new Message("APPEND_RESPONSE", myAddress, currentTerm, false);
         }
-        
+
         // 2. Akui Leader dan Reset Timer
-        // Jika Term Leader lebih besar, atau Term sama tapi saya bukan Follower, kita mundur.
+        // Jika Term Leader lebih besar, atau Term sama tapi saya bukan Follower, kita
+        // mundur.
         if (leaderTerm > currentTerm || state != NodeState.FOLLOWER) {
-            System.out.println(myAddress + " [AE] Mengakui Leader " + request.getSender() + ", Term baru: " + leaderTerm);
+            System.out
+                    .println(myAddress + " [AE] Mengakui Leader " + request.getSender() + ", Term baru: " + leaderTerm);
             currentTerm = leaderTerm;
             state = NodeState.FOLLOWER; // Mundur menjadi Follower
             votedFor = null;
         }
         // Pastikan timer di-reset agar tidak terjadi Election baru
-        resetElectionTimer(); 
+        resetElectionTimer();
         leaderAddress = request.getSender(); // Catat siapa Leader yang baru/aktif
 
         // Heartbeat murni (Payload logEntries = null)
@@ -338,17 +347,38 @@ public class RaftNode implements RpcService {
 
             // Payload berisi Map untuk detail log dan List<LogEntry> untuk entri baru
             Map<String, Object> payloadMap = (Map<String, Object>) request.getPayload();
-            
+
+            // [FIX PEER DISCOVERY] : Learn about other peers from leader
+            Object clusterPeersObj = payloadMap.get("clusterPeers");
+            if (clusterPeersObj != null) {
+                try {
+                    List<Map<String, Object>> peerMaps = (List<Map<String, Object>>) clusterPeersObj;
+                    for (Map<String, Object> peerMap : peerMaps) {
+                        String ip = (String) peerMap.get("ip");
+                        Integer port = (Integer) peerMap.get("port");
+                        if (ip != null && port != null) {
+                            Address peerAddr = new Address(ip, port);
+                            addPeer(peerAddr);
+                        }
+                    }
+                } catch (Exception e) {
+                    System.err.println(myAddress + " [AE] Error parsing clusterPeers: " + e.getMessage());
+                }
+            }
+            // --- Log Replication Request ---
+
+            // Payload berisi Map untuk detail log dan List<LogEntry> untuk entri baru
+            Map<String, Object> payloadMap = (Map<String, Object>) request.getPayload();
+
             // Ambil PrevLog Index dan Term dari request
             int prevLogIndex = (int) payloadMap.getOrDefault("prevLogIndex", -1);
             int prevLogTerm = (int) payloadMap.getOrDefault("prevLogTerm", 0);
-            
+
             // Ambil Entri Log yang akan ditambahkan
             List<LogEntry> newEntries = convertToLogEntries(payloadMap.get("entries"));
-            
-            System.out.println(myAddress + " [AE] Log diterima. Prev Index: " + prevLogIndex + 
-                               " | Entries baru: " + (newEntries == null ? 0 : newEntries.size()));
 
+            System.out.println(myAddress + " [AE] Log diterima. Prev Index: " + prevLogIndex +
+                    " | Entries baru: " + (newEntries == null ? 0 : newEntries.size()));
 
             // 3. [ANGGOTA 2]: Implementasi Log Matching Property (Rule 2)
             // Cek apakah log di indeks prevLogIndex lokal sama dengan Term Leader
@@ -359,27 +389,27 @@ public class RaftNode implements RpcService {
                     // Minta Leader mengirim log yang lebih mundur
                     return new Message("APPEND_RESPONSE", myAddress, currentTerm, false);
                 }
-                
+
                 LogEntry entryAtPrevIndex = log.get(prevLogIndex);
                 if (entryAtPrevIndex.getTerm() != prevLogTerm) {
                     // 3B. Log Term Konflik
-                    System.out.println(myAddress + " [AE] GAGAL: Konflik Term di Index " + prevLogIndex + 
-                                       ". Lokal Term: " + entryAtPrevIndex.getTerm() + 
-                                       " | Leader Term: " + prevLogTerm);
+                    System.out.println(myAddress + " [AE] GAGAL: Konflik Term di Index " + prevLogIndex +
+                            ". Lokal Term: " + entryAtPrevIndex.getTerm() +
+                            " | Leader Term: " + prevLogTerm);
                     // Hapus semua log yang konflik dari Index ini ke atas
                     log.subList(prevLogIndex, log.size()).clear();
                     // Minta Leader mengirim ulang
                     return new Message("APPEND_RESPONSE", myAddress, currentTerm, false);
                 }
             }
-            
+
             // 4. [ANGGOTA 2]: Append New Entries (Rule 3)
             if (newEntries != null && !newEntries.isEmpty()) {
                 // Tambahkan entri baru ke log lokal
                 for (int i = 0; i < newEntries.size(); i++) {
                     LogEntry newEntry = newEntries.get(i);
                     int index = prevLogIndex + 1 + i;
-                    
+
                     if (index < log.size()) {
                         // Jika sudah ada entri di indeks ini
                         LogEntry existingEntry = log.get(index);
@@ -394,7 +424,7 @@ public class RaftNode implements RpcService {
                     }
                 }
             }
-            
+
             // 5. Update Commit Index (Rule 4)
             int leaderCommit = (int) payloadMap.getOrDefault("leaderCommit", -1);
             if (leaderCommit > commitIndex) {
@@ -404,38 +434,39 @@ public class RaftNode implements RpcService {
                 applyLogToStateMachine(); // Nanti akan kita implementasikan
             }
 
-            // 
+            //
         }
 
         return new Message("APPEND_RESPONSE", myAddress, currentTerm, true);
     }
 
     // ... (State volatile: commitIndex, lastApplied, dll)
-    
+
     // ... (Konstruktor dan start())
 
     // --- Metode Internal Raft (Lengkapi Implementasi) ---
 
     // Metode untuk menerapkan Log yang sudah di-commit ke State Machine
     private synchronized void applyLogToStateMachine() {
-        // Hanya terapkan entri yang sudah di-commit (commitIndex) dan belum diterapkan (lastApplied)
+        // Hanya terapkan entri yang sudah di-commit (commitIndex) dan belum diterapkan
+        // (lastApplied)
         while (commitIndex > lastApplied) {
             lastApplied++;
-            
+
             // Ambil LogEntry pada indeks yang akan diterapkan
             LogEntry entry = log.get(lastApplied);
-            
+
             // Lakukan parsing dan eksekusi command pada StateMachine (KVStore)
             String result = parseAndExecuteCommand(entry.getCommand());
 
             // Simpan hasil eksekusi untuk diambil oleh execute()
             executionResults.put(lastApplied, result);
-            
+
             // Log aksi yang diterapkan
-            System.out.println(myAddress + " [APPLY] Log Index " + lastApplied + " (Term " + entry.getTerm() + 
-                               ") diterapkan. Command: " + entry.getCommand() + ". Hasil: " + result);
-            
-            // Catatan: Jika ini adalah command GET/PING, hasilnya (result) diabaikan 
+            System.out.println(myAddress + " [APPLY] Log Index " + lastApplied + " (Term " + entry.getTerm() +
+                    ") diterapkan. Command: " + entry.getCommand() + ". Hasil: " + result);
+
+            // Catatan: Jika ini adalah command GET/PING, hasilnya (result) diabaikan
             // karena log hanya untuk operasi yang mengubah state (SET, APPEND, DEL).
         }
 
@@ -443,18 +474,24 @@ public class RaftNode implements RpcService {
         this.notifyAll();
     }
 
-
     /**
-     * Helper untuk mengurai (parse) string perintah dari Log Raft 
+     * Helper untuk mengurai (parse) string perintah dari Log Raft
      * dan mengeksekusinya pada StateMachine (KVStore).
+     * 
      * @param commandString Contoh: "set key1 val1" atau "ping"
      * @return Hasil eksekusi dari StateMachine (String)
      */
     private String parseAndExecuteCommand(String commandString) {
+        // Handle Transaction commands (TXN: prefix)
+        if (commandString.startsWith("TXN:")) {
+            return executeTransactionCommand(commandString);
+        }
+
         // Memecah string command menjadi maksimal 3 bagian: COMMAND KEY VALUE
         String[] parts = commandString.trim().split("\\s+", 3);
-        
-        if (parts.length == 0) return "ERROR: Empty command";
+
+        if (parts.length == 0)
+            return "ERROR: Empty command";
 
         String command = parts[0].toLowerCase();
         String key = parts.length > 1 ? parts[1] : "";
@@ -476,7 +513,8 @@ public class RaftNode implements RpcService {
                     // strln mengembalikan int, kita ubah jadi string
                     return String.valueOf(stateMachine.strln(key));
                 case "get":
-                    // get tidak mengubah state, tapi jika ada di log, tetap di-apply (meskipun ini tidak efisien)
+                    // get tidak mengubah state, tapi jika ada di log, tetap di-apply (meskipun ini
+                    // tidak efisien)
                     return stateMachine.get(key);
                 default:
                     // Di masa depan, di sini bisa diisi logika Membership Change (C/O)
@@ -488,43 +526,86 @@ public class RaftNode implements RpcService {
         }
     }
 
+    /**
+     * Execute a transaction command.
+     * Format: TXN:txnId:["cmd1","cmd2",...]
+     * 
+     * @param transactionPayload The full TXN: prefixed command
+     * @return Result string indicating success/failure
+     */
+    private String executeTransactionCommand(String transactionPayload) {
+        try {
+            // Parse TXN:txnId:[...]
+            String content = transactionPayload.substring(4); // Remove "TXN:"
+            int colonIndex = content.indexOf(':');
+
+            if (colonIndex == -1) {
+                return "ERROR: Invalid transaction format";
+            }
+
+            String transactionId = content.substring(0, colonIndex);
+            String jsonCommands = content.substring(colonIndex + 1);
+
+            // Parse JSON array of commands
+            ObjectMapper mapper = new ObjectMapper();
+            List<String> commands = mapper.readValue(jsonCommands, new TypeReference<List<String>>() {
+            });
+
+            // Execute transaction on StateMachine
+            TransactionResult result = stateMachine.executeTransaction(transactionId, commands);
+
+            System.out.println(myAddress + " [TXN] " + result.toString());
+
+            if (result.isSuccess()) {
+                // Return success with results as JSON
+                return "TXN_OK:" + mapper.writeValueAsString(result.getResults());
+            } else {
+                return "TXN_FAIL:" + result.getErrorMessage();
+            }
+
+        } catch (Exception e) {
+            return "ERROR: Transaction parsing failed: " + e.getMessage();
+        }
+    }
+
     @Override
     public Message execute(Message request) {
         // Pastikan akses ke state RaftNode synchronized
-        synchronized(this) {
+        synchronized (this) {
             // 1. Cek State: Jika bukan LEADER, return REDIRECT
             if (state != NodeState.LEADER) {
-                System.out.println(myAddress + " [Execute] Tolak dari " + request.getSender() + ". Redirect ke " + leaderAddress);
+                System.out.println(
+                        myAddress + " [Execute] Tolak dari " + request.getSender() + ". Redirect ke " + leaderAddress);
                 return createRedirectResponse();
             }
 
             // [ANGGOTA 2 - SELESAI]: Handle Client Request
-            
+
             String commandString = (String) request.getPayload();
             String command = commandString.trim().split("\\s+", 2)[0].toLowerCase();
-            
+
             // Jika PING, GET, langsung eksekusi tanpa log replication
             if (command.equals("ping") || command.equals("get") || command.equals("strln")) {
                 String result = parseAndExecuteCommand(commandString);
                 Message response = new Message("EXECUTE_RESPONSE", myAddress, currentTerm, result);
-                response.setStatus("OK"); 
+                response.setStatus("OK");
                 return response;
             }
-            
+
             // 2. Buat LogEntry baru dan tambahkan secara lokal
             LogEntry newEntry = new LogEntry(currentTerm, commandString);
             int newLogIndex = log.size();
             log.add(newEntry);
             System.out.println(myAddress + " [Execute] Log baru ditambahkan secara lokal: " + newEntry.toString());
-            
+
             // Update matchIndex dan nextIndex Leader untuk dirinya sendiri
             matchIndex.put(myAddress, log.size() - 1);
             nextIndex.put(myAddress, log.size());
 
             // 3. Inisiasi Replikasi Log ke Followers
-            
+
             // Gunakan AtomicInteger untuk menghitung ACK sukses (termasuk local append)
-            AtomicInteger acksReceived = new AtomicInteger(1); 
+            AtomicInteger acksReceived = new AtomicInteger(1);
             int requiredAcks = (peers.size() + 1) / 2 + 1; // Mayoritas
 
             if (peers.isEmpty() || requiredAcks <= 1) {
@@ -536,27 +617,27 @@ public class RaftNode implements RpcService {
                     scheduler.submit(() -> replicateLogToPeer(peer, acksReceived));
                 }
             }
-            
+
             // 4. Blok thread client sampai replikasi selesai (atau timeout)
             long startTime = System.currentTimeMillis();
             long timeout = 5000; // 5 detik timeout (Contoh)
-            
+
             boolean majorityReached = false;
             while (System.currentTimeMillis() - startTime < timeout) {
                 if (acksReceived.get() >= requiredAcks) {
                     majorityReached = true;
                     break;
                 }
-                
+
                 try {
                     // Menunggu notifikasi dari replicateLogToPeer saat ACK diterima
-                    this.wait(100); 
+                    this.wait(100);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
                 }
             }
-            
+
             // 5. Apply Log dan Respon
             if (majorityReached) {
                 updateCommitIndex();
@@ -574,12 +655,13 @@ public class RaftNode implements RpcService {
                 // Ambil hasil dari cache (sudah dieksekusi di applyLogToStateMachine)
                 String result = executionResults.getOrDefault(newLogIndex, "OK");
                 executionResults.remove(newLogIndex); // Cleanup
-                
+
                 Message response = new Message("EXECUTE_RESPONSE", myAddress, currentTerm, result);
                 response.setStatus("OK"); // [TAMBAHAN]
                 return response;
             } else {
-                Message response = new Message("FAIL", myAddress, currentTerm, "Log replication failed: Timeout waiting for majority ACK.");
+                Message response = new Message("FAIL", myAddress, currentTerm,
+                        "Log replication failed: Timeout waiting for majority ACK.");
                 response.setStatus("FAIL"); // [TAMBAHAN]
                 return response;
             }
@@ -588,76 +670,100 @@ public class RaftNode implements RpcService {
 
     /**
      * Helper untuk mengirim Log/Heartbeat ke peer tertentu.
-     * @param peer Alamat follower
-     * @param acksReceived AtomicInteger untuk menghitung ACK sukses dari client request. Null jika dipanggil dari Heartbeat.
+     * 
+     * @param peer         Alamat follower
+     * @param acksReceived AtomicInteger untuk menghitung ACK sukses dari client
+     *                     request. Null jika dipanggil dari Heartbeat.
      */
     private void replicateLogToPeer(Address peer, AtomicInteger acksReceived) {
         try {
             RpcService peerProxy = getPeerProxy(peer);
-            
-            synchronized(this) {
+
+            synchronized (this) {
                 // [FIX BUG]: Inisialisasi nextIndex yang benar.
-                // Jika nextIndex belum ada, mulai dari log terakhir (bukan log.size() yang baru saja ditambah)
-                // Kita mau kirim log yang baru saja ditambah, jadi defaultnya harus index log itu.
+                // Jika nextIndex belum ada, mulai dari log terakhir (bukan log.size() yang baru
+                // saja ditambah)
+                // Kita mau kirim log yang baru saja ditambah, jadi defaultnya harus index log
+                // itu.
                 int lastLogIndex = log.size() - 1;
-                int nextIdx = nextIndex.getOrDefault(peer, lastLogIndex); 
-                
+                int nextIdx = nextIndex.getOrDefault(peer, lastLogIndex);
+
                 // Pastikan nextIdx tidak melebihi size (jika ada race condition)
-                if (nextIdx > log.size()) nextIdx = log.size();
+                if (nextIdx > log.size())
+                    nextIdx = log.size();
 
                 int prevLogIndex = nextIdx - 1;
-                
+
                 List<LogEntry> entriesToSend = Collections.emptyList();
                 if (nextIdx < log.size()) {
-                     entriesToSend = new ArrayList<>(log.subList(nextIdx, log.size()));
+                    entriesToSend = new ArrayList<>(log.subList(nextIdx, log.size()));
                 }
 
                 Map<String, Object> payload = new HashMap<>();
                 payload.put("prevLogIndex", prevLogIndex);
-                
-                int prevLogTerm = (prevLogIndex >= 0 && prevLogIndex < log.size()) 
-                                ? log.get(prevLogIndex).getTerm() 
-                                : 0;
+
+                int prevLogTerm = (prevLogIndex >= 0 && prevLogIndex < log.size())
+                        ? log.get(prevLogIndex).getTerm()
+                        : 0;
                 payload.put("prevLogTerm", prevLogTerm);
                 payload.put("leaderCommit", commitIndex);
                 payload.put("entries", entriesToSend);
-                
+
+                // [FIX PEER DISCOVERY]: Include known peers so followers learn about the
+                // cluster
+                List<Map<String, Object>> clusterPeers = new ArrayList<>();
+                for (Address p : peers) {
+                    Map<String, Object> peerInfo = new HashMap<>();
+                    peerInfo.put("ip", p.getIp());
+                    peerInfo.put("port", p.getPort());
+                    clusterPeers.add(peerInfo);
+                }
+                // Also include self (leader) so follower knows about leader
+                Map<String, Object> selfInfo = new HashMap<>();
+                selfInfo.put("ip", myAddress.getIp());
+                selfInfo.put("port", myAddress.getPort());
+                clusterPeers.add(selfInfo);
+                payload.put("clusterPeers", clusterPeers);
+
                 // Debug Print
-                // System.out.println("DEBUG: Mengirim ke " + peer + " | prevIdx: " + prevLogIndex + " | entries: " + entriesToSend.size());
+                // System.out.println("DEBUG: Mengirim ke " + peer + " | prevIdx: " +
+                // prevLogIndex + " | entries: " + entriesToSend.size());
 
                 Message request = new Message("APPEND_ENTRIES", myAddress, currentTerm, payload);
                 Message response = peerProxy.appendEntries(request);
-                
+
                 if (response != null) {
                     if (response.getTerm() > currentTerm) {
                         stepDown(response.getTerm());
                         return;
                     }
-                    
+
                     if ((boolean) response.getPayload()) {
                         // SUKSES
                         int newMatchIndex = prevLogIndex + entriesToSend.size();
                         matchIndex.put(peer, newMatchIndex);
                         nextIndex.put(peer, newMatchIndex + 1);
-                        
+
                         // [UPDATE]: Print hanya jika bukan heartbeat murni
                         if (!entriesToSend.isEmpty()) {
-                            System.out.println(myAddress + " [Rep] Sukses ke " + peer + ". Match Index: " + newMatchIndex);
+                            System.out.println(
+                                    myAddress + " [Rep] Sukses ke " + peer + ". Match Index: " + newMatchIndex);
                         }
-                        
+
                         if (acksReceived != null) {
                             acksReceived.incrementAndGet();
                             this.notifyAll();
                         }
                         updateCommitIndex();
-                        
+
                     } else {
                         // GAGAL (Log Matching Failed)
                         int newNextIndex = nextIndex.getOrDefault(peer, 1);
                         if (newNextIndex > 0) { // Fix infinite loop di 0
                             nextIndex.put(peer, newNextIndex - 1);
-                            // System.out.println(myAddress + " [Rep] Gagal ke " + peer + ". Mundur Next Index ke: " + (newNextIndex - 1));
-                            
+                            // System.out.println(myAddress + " [Rep] Gagal ke " + peer + ". Mundur Next
+                            // Index ke: " + (newNextIndex - 1));
+
                             // Retry rekursif
                             replicateLogToPeer(peer, acksReceived);
                         }
@@ -671,29 +777,32 @@ public class RaftNode implements RpcService {
         }
     }
 
-// ... (Metode-metode lain)
+    // ... (Metode-metode lain)
 
     private boolean isLogUpToDate(int candidateLastLogIndex, int candidateLastLogTerm) {
         // [ANGGOTA 2 - SELESAI]: Implementasi Log Up-to-Date Rule
-        
+
         // 1. Dapatkan Log Terakhir Node Lokal (Saya)
         int myLastLogIndex = log.isEmpty() ? -1 : log.size() - 1;
         // Term log terakhir 0 jika log kosong
-        int myLastLogTerm = log.isEmpty() ? 0 : log.get(myLastLogIndex).getTerm(); 
-        
-        System.out.println(myAddress + " [Log Check] Kandidat: Term " + candidateLastLogTerm + " Index " + candidateLastLogIndex + 
-                           " | Saya: Term " + myLastLogTerm + " Index " + myLastLogIndex);
+        int myLastLogTerm = log.isEmpty() ? 0 : log.get(myLastLogIndex).getTerm();
+
+        System.out.println(
+                myAddress + " [Log Check] Kandidat: Term " + candidateLastLogTerm + " Index " + candidateLastLogIndex +
+                        " | Saya: Term " + myLastLogTerm + " Index " + myLastLogIndex);
 
         // Logika Raft Rule:
-        // Kandidat diizinkan menang jika lognya lebih up-to-date atau sama up-to-date-nya.
+        // Kandidat diizinkan menang jika lognya lebih up-to-date atau sama
+        // up-to-date-nya.
         // Log dibandingkan dulu berdasarkan Term, baru Index.
 
         // a. Jika Last Log Term Kandidat lebih besar, maka Kandidat lebih up-to-date.
         if (candidateLastLogTerm > myLastLogTerm) {
             return true;
         }
-        
-        // b. Jika Last Log Term sama, cek panjang log. Log yang lebih panjang lebih up-to-date.
+
+        // b. Jika Last Log Term sama, cek panjang log. Log yang lebih panjang lebih
+        // up-to-date.
         if (candidateLastLogTerm == myLastLogTerm && candidateLastLogIndex >= myLastLogIndex) {
             return true;
         }
@@ -711,19 +820,20 @@ public class RaftNode implements RpcService {
     @Override
     public Message requestLog(Message request) {
         // Gunakan synchronized untuk akses state yang aman
-        synchronized(this) {
+        synchronized (this) {
             // 1. Cek Authority: Hanya Leader yang boleh mengembalikan Log
             if (state != NodeState.LEADER) {
                 // Jika saya bukan Leader, beritahu Client alamat Leader yang saya tahu
                 return createRedirectResponse();
             }
-            
+
             // 2. Return Log
-            // Kita kembalikan salinan (copy) dari log agar list asli aman dari modifikasi luar
+            // Kita kembalikan salinan (copy) dari log agar list asli aman dari modifikasi
+            // luar
             List<LogEntry> logCopy = new ArrayList<>(log);
-            
+
             System.out.println(myAddress + " [LogRequest] Mengirimkan " + log.size() + " entri log ke Client.");
-            
+
             return new Message("LOG_RESPONSE", myAddress, currentTerm, logCopy);
         }
     }
@@ -740,7 +850,7 @@ public class RaftNode implements RpcService {
         // [ANGGOTA 3 - SELESAI]: Dynamic Membership Remove
         if (peers.contains(peer)) {
             peers.remove(peer);
-            
+
             // Jika saya Leader, bersihkan state tracking untuk peer ini
             if (nextIndex != null) {
                 nextIndex.remove(peer);
@@ -748,33 +858,35 @@ public class RaftNode implements RpcService {
             if (matchIndex != null) {
                 matchIndex.remove(peer);
             }
-            
+
             System.out.println("[Membership] Node dihapus dari cluster: " + peer);
-            
-            // Opsional: Cek ulang komitmen log karena quorum mungkin berubah (jumlah peer berkurang)
+
+            // Opsional: Cek ulang komitmen log karena quorum mungkin berubah (jumlah peer
+            // berkurang)
             if (state == NodeState.LEADER) {
                 updateCommitIndex();
             }
         }
     }
-    
+
     // --- Helper Anggota 3: Redirection ---
     private Message createRedirectResponse() {
         // [ANGGOTA 3 - SELESAI]: Redirect Client
         return new Message("REDIRECT", myAddress, currentTerm, leaderAddress);
     }
-    
+
     // --- Helper Anggota 2: Update Commit Index ---
     private synchronized void updateCommitIndex() {
         // Logika untuk mengupdate commitIndex
-        
+
         int N = log.size();
         for (int i = commitIndex + 1; i < N; i++) {
             LogEntry entry = log.get(i);
-            
+
             // Raft Rule: Hanya bisa meng-commit log dari Term saat ini
-            if (entry.getTerm() != currentTerm) continue;
-            
+            if (entry.getTerm() != currentTerm)
+                continue;
+
             int count = 1; // Leader sendiri sudah mereplikasi (local append)
             for (Address peer : peers) {
                 // Hitung berapa banyak follower yang sudah mereplikasi log di index 'i'
@@ -782,12 +894,12 @@ public class RaftNode implements RpcService {
                     count++;
                 }
             }
-            
+
             // Cek jika sudah mayoritas (N/2 + 1)
             if (count > (peers.size() + 1) / 2) {
                 commitIndex = i;
                 // Terapkan log yang baru ter-commit
-                applyLogToStateMachine(); 
+                applyLogToStateMachine();
             } else {
                 break; // Karena log harus berurutan (jika log i gagal, log i+1 pasti gagal)
             }
