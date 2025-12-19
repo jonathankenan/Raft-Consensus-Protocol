@@ -50,11 +50,13 @@ public class RaftNode implements RpcService {
     private ScheduledFuture<?> heartbeatTimerTask;
     private Random random;
     private Map<Integer, String> executionResults = new ConcurrentHashMap<>();
+    private SnapshotManager snapshotManager;
 
     // Time Constants (in milliseconds)
     private static final int HEARTBEAT_INTERVAL = 500;
     private static final int ELECTION_MIN_DELAY = 1500;
     private static final int ELECTION_MAX_DELAY = 3000;
+    private static final int SNAPSHOT_THRESHOLD = 100;
 
     public RaftNode(Address myAddress, List<Address> peers) {
         this.myAddress = myAddress;
@@ -74,6 +76,9 @@ public class RaftNode implements RpcService {
         // Initialize volatile leader state
         this.nextIndex = new ConcurrentHashMap<>();
         this.matchIndex = new ConcurrentHashMap<>();
+
+        this.snapshotManager = new SnapshotManager(myAddress.toString().replace(":", "_"));
+        loadSnapshotIfExists();
 
         System.out.println("Node " + myAddress + " started. State: FOLLOWER");
     }
@@ -666,6 +671,8 @@ public class RaftNode implements RpcService {
                 String result = executionResults.getOrDefault(newLogIndex, "OK");
                 executionResults.remove(newLogIndex); // Cleanup
 
+                checkAndCreateSnapshot();
+
                 Message response = new Message("EXECUTE_RESPONSE", myAddress, currentTerm, result);
                 response.setStatus("OK");
                 return response;
@@ -939,6 +946,77 @@ public class RaftNode implements RpcService {
                 applyLogToStateMachine();
             } else {
                 break; // Karena log harus berurutan (jika log i gagal, log i+1 pasti gagal)
+            }
+        }
+    }
+
+    /**
+     * Load snapshot saat startup
+     */
+    private synchronized void loadSnapshotIfExists() {
+        SnapshotManager.Snapshot snapshot = snapshotManager.loadLatestSnapshot();
+        
+        if (snapshot != null) {
+            // Restore state machine dari snapshot
+            stateMachine.getAllData().clear();
+            stateMachine.getAllData().putAll(snapshot.data);
+            
+            // Update log metadata
+            this.lastApplied = snapshot.lastIncludedIndex;
+            this.commitIndex = snapshot.lastIncludedIndex;
+            
+            System.out.println(myAddress + " [Snapshot] Restored from snapshot: " + 
+                            snapshot.data.size() + " keys, lastIndex: " + snapshot.lastIncludedIndex);
+        }
+    }
+
+    /**
+     * Check dan create snapshot jika threshold tercapai
+     */
+    private synchronized void checkAndCreateSnapshot() {
+        if (snapshotManager.shouldCreateSnapshot(log.size(), SNAPSHOT_THRESHOLD)) {
+            createSnapshot();
+        }
+    }
+
+    /**
+     * Create snapshot dan compact log
+     */
+    private synchronized void createSnapshot() {
+        // Dapatkan data state machine saat ini
+        Map<String, String> data = stateMachine.getAllData();
+        
+        // Create snapshot
+        boolean success = snapshotManager.createSnapshot(data, lastApplied, 
+                                                        log.isEmpty() ? 0 : log.get(lastApplied).getTerm());
+        
+        if (success) {
+            // Hapus entri log lama (simpan hanya entri setelah snapshot)
+            int snapshotIndex = snapshotManager.getLastIncludedIndex();
+            
+            if (snapshotIndex >= 0 && snapshotIndex < log.size()) {
+                int entriesRemoved = snapshotIndex + 1;
+                log.subList(0, entriesRemoved).clear();
+                
+                System.out.println(myAddress + " [Snapshot] Log compacted: menghapus " + 
+                                entriesRemoved + " entries, tersisa: " + log.size());
+                
+                // Adjust indices karena log sudah di-compact
+                // lastApplied dan commitIndex sekarang relative ke snapshot
+                lastApplied -= entriesRemoved;
+                commitIndex -= entriesRemoved;
+                
+                // Update matchIndex dan nextIndex untuk followers
+                for (Address peer : peers) {
+                    if (matchIndex.containsKey(peer)) {
+                        int oldMatch = matchIndex.get(peer);
+                        matchIndex.put(peer, Math.max(-1, oldMatch - entriesRemoved));
+                    }
+                    if (nextIndex.containsKey(peer)) {
+                        int oldNext = nextIndex.get(peer);
+                        nextIndex.put(peer, Math.max(0, oldNext - entriesRemoved));
+                    }
+                }
             }
         }
     }
