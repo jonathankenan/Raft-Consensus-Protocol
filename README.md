@@ -1,195 +1,180 @@
-# Panduan Eksekusi Tugas Besar Raft & KV Store
+# Raft Consensus & Key-Value Store
 
-Dokumen ini berisi langkah-langkah lengkap untuk melakukan *build*, menjalankan kluster Raft (3 node), dan menggunakan Client untuk berinteraksi dengan Key-Value Store.
-
-## Prasyarat
-
-Pastikan komputer Anda sudah terinstall:
-1.  **Java JDK 17** atau lebih baru.
-2.  **Apache Maven** (pastikan command `mvn -version` bisa berjalan di terminal).
+A distributed key-value store implementation using the Raft consensus algorithm in Java.
 
 ---
 
-## Langkah 1: Build Project
+## Prerequisites
 
-Sebelum menjalankan program, kode harus dikompilasi dan semua library (file `.jar`) harus disalin ke folder target agar bisa dibaca saat *runtime*.
+Make sure you have installed:
+1. **Java JDK 17** or newer
+2. **Apache Maven** (verify with `mvn -version`)
 
-Jalankan perintah berikut di terminal (pastikan berada di *root folder* proyek):
+---
 
+## Build Project
+
+### 1. Clean Previous Build
 ```bash
-mvn clean package dependency:copy-dependencies
+mvn clean
+```
+**Explanation:**
+- `mvn` - Runs the Maven build tool
+- `clean` - Deletes the `target/` folder containing previous compilation results
+- Useful to ensure no old files interfere with the new build
+
+### 2. Compile and Prepare Dependencies
+```bash
+mvn compile dependency:copy-dependencies
+```
+**Explanation:**
+- `compile` - Compiles all Java source code from `src/main/java/` to `target/classes/`
+- `dependency:copy-dependencies` - Copies all required JAR libraries (jsonrpc4j, jackson, etc.) to `target/dependency/`
+- Both steps are required for the program to run with all dependencies
+
+> **Alternative:** For a complete build in one command:
+> ```bash
+> mvn clean package dependency:copy-dependencies
+> ```
+
+---
+
+## Running the Server (Raft Node)
+
+### Command Format
+```bash
+# Linux / macOS / WSL
+java -cp "target/classes:target/dependency/*" com.labbrother.Server <HOST> <PORT> [<CONTACT_HOST> <CONTACT_PORT>]
+
+# Windows (PowerShell / CMD)
+java -cp "target/classes;target/dependency/*" com.labbrother.Server <HOST> <PORT> [<CONTACT_HOST> <CONTACT_PORT>]
 ```
 
-PENTING: Pastikan proses ini menghasilkan pesan `BUILD SUCCESS` dan cek apakah folder `target/dependency` sudah terisi dengan file-file .jar (seperti jsonrpc4j, jackson, dll).
+**Parameter Explanation:**
+| Parameter | Description |
+|-----------|-------------|
+| `-cp` | Classpath - location of class files and JAR libraries |
+| `target/classes` | Location of our compiled code |
+| `target/dependency/*` | Location of all JAR libraries (use `:` for Linux, `;` for Windows) |
+| `com.labbrother.Server` | Main class to execute |
+| `<HOST>` | Hostname for this node (usually `localhost`) |
+| `<PORT>` | Port for this node (e.g., `8001`, `8002`, `8003`) |
+| `<CONTACT_HOST>` | **(Optional)** Hostname of an existing node in the cluster |
+| `<CONTACT_PORT>` | **(Optional)** Port of an existing node in the cluster |
 
----
+> **Important:** If `CONTACT_HOST` and `CONTACT_PORT` are not provided, the node will consider itself as the first node and immediately become the **Leader**.
 
-Langkah 2: Menjalankan Kluster (3 Node)
-Untuk mensimulasikan sistem terdistribusi, kita akan menjalankan 3 instance server di terminal yang berbeda. Silakan pilih instruksi sesuai Sistem Operasi Anda karena pemisah classpath berbeda.
+### Example: Running a 3-Node Cluster
 
-### OPSI A: Windows (PowerShell / CMD)
-Gunakan pemisah titik koma (;) untuk classpath.
+#### Linux / macOS / WSL (separator `:`)
 
-Buka Terminal 1 (Node Leader - Port 8001) Jalankan node pertama. Node ini akan menjadi inisiator Leader.
+**Terminal 1 - Leader Node (Port 8001):**
+```bash
+java -cp "target/classes:target/dependency/*" com.labbrother.Server localhost 8001
+```
+*First node, no contact node → becomes Leader*
 
-PowerShell:
+**Terminal 2 - Follower Node (Port 8002):**
+```bash
+java -cp "target/classes:target/dependency/*" com.labbrother.Server localhost 8002 localhost 8001
+```
+*Joins the cluster through the node at port 8001*
+
+**Terminal 3 - Follower Node (Port 8003):**
+```bash
+java -cp "target/classes:target/dependency/*" com.labbrother.Server localhost 8003 localhost 8001
+```
+*Joins the cluster through the node at port 8001*
+
+#### Windows PowerShell / CMD (separator `;`)
+
+**Terminal 1 - Leader Node (Port 8001):**
 ```powershell
 java -cp "target/classes;target/dependency/*" com.labbrother.Server localhost 8001
 ```
 
-Buka Terminal 2 (Node Follower - Port 8002) Jalankan node kedua dan arahkan untuk bergabung ke Node 1.
-
-PowerShell:
+**Terminal 2 - Follower Node (Port 8002):**
 ```powershell
 java -cp "target/classes;target/dependency/*" com.labbrother.Server localhost 8002 localhost 8001
 ```
 
-Buka Terminal 3 (Node Follower - Port 8003) Jalankan node ketiga dan arahkan untuk bergabung ke Node 1.
-
-PowerShell:
+**Terminal 3 - Follower Node (Port 8003):**
 ```powershell
 java -cp "target/classes;target/dependency/*" com.labbrother.Server localhost 8003 localhost 8001
 ```
 
-### OPSI B: Linux / WSL / macOS
-Gunakan pemisah titik dua (:) untuk classpath.
-
-Buka Terminal 1 (Node Leader - Port 8001)
-
-Bash:
-```bash
-java -cp "target/classes:target/dependency/*" com.labbrother.Server localhost 8001
-```
-
-Buka Terminal 2 (Node Follower - Port 8002)
-
-Bash:
-```bash
-java -cp "target/classes:target/dependency/*" com.labbrother.Server localhost 8002 localhost 8001
-```
-
-Buka Terminal 3 (Node Follower - Port 8003)
-
-Bash:
-```bash
-java -cp "target/classes:target/dependency/*" com.labbrother.Server localhost 8003 localhost 8001
-```
-
 ---
 
-Langkah 3: Menjalankan Client
-Buka Terminal ke-4 untuk menjalankan aplikasi Client. Hubungkan client ke salah satu node yang aktif (biasanya Leader di port 8001).
+## Running the Client
 
-Windows (PowerShell):
-```powershell
+### Command Format
+```bash
+# Linux / macOS / WSL
+java -cp "target/classes:target/dependency/*" com.labbrother.Client <HOST> <PORT>
+
+# Windows (PowerShell / CMD)
+java -cp "target/classes;target/dependency/*" com.labbrother.Client <HOST> <PORT>
+```
+
+**Parameter Explanation:**
+| Parameter | Description |
+|-----------|-------------|
+| `<HOST>` | Hostname of the server to connect to |
+| `<PORT>` | Server port (ideally connect to the Leader) |
+
+### Example
+```bash
+# Linux
+java -cp "target/classes:target/dependency/*" com.labbrother.Client localhost 8001
+
+# Windows
 java -cp "target/classes;target/dependency/*" com.labbrother.Client localhost 8001
 ```
-Linux / WSL / macOS:
-```bash
-java -cp "target/classes:target/dependency/*" com.labbrother.Client localhost 8001
-```
-
-Langkah 4: Penggunaan (Commands)
-Setelah Client terhubung, Anda bisa mengetikkan perintah berikut untuk memanipulasi Key-Value Store:
-
-```text
-# 1. Cek Koneksi
-> ping
-(Output: PONG)
-
-# 2. Menyimpan Data (Set)
-> set <key> <value>
-Contoh: > set user1 budi
-(Output: OK)
-
-# 3. Mengambil Data (Get)
-> get <key>
-Contoh: > get user1
-(Output: budi)
-
-# 4. Menambahkan String (Append)
-> append <key> <tambahan>
-Contoh: > append user1 _santoso
-(Output: OK -> Nilai menjadi "budi_santoso")
-
-# 5. Cek Panjang String (Strln)
-> strln <key>
-Contoh: > strln user1
-(Output: 12)
-
-# 6. Menghapus Data (Del)
-> del <key>
-Contoh: > del user1
-(Output: budi_santoso -> Mengembalikan nilai yang dihapus)
-```
 
 ---
 
-Skenario Pengujian (Demo)
-Gunakan skenario ini untuk memverifikasi fitur Raft berjalan dengan benar.
+## Client Commands
 
-A. Uji Log Replication
-1. Jalankan 3 Node Server (Terminal 1, 2, 3).
-2. Di Terminal Client (Terminal 4), lakukan perintah: `set tes 123`.
-3. Cek log di terminal Node 2 dan Node 3 (Follower).
+Once the Client is connected, type the following commands:
 
-Verifikasi: Harusnya muncul log `[APPLY] Log Index ... Command: set tes 123.` Ini artinya data dari Leader sudah tersalin dan diterapkan di Follower.
-
-B. Uji Leader Election (Failover)
-1. Pastikan Node 1 adalah Leader (cek terminalnya, harus ada log `[Leader] Mengirim Heartbeat...`).
-2. Matikan terminal Node 1 (tekan Ctrl + C).
-3. Amati terminal Node 2 dan Node 3.
-
-Verifikasi:
-- Salah satu node akan mendeteksi timeout (Log: Heartbeat Timeout).
-- Muncul log `!!! ELECTION STARTED !!!`.
-- Salah satu node akan menang dan mencetak `$$$ SAYA ADALAH LEADER $$$`.
-- Di Client, hubungkan ulang ke port Leader baru (misal port 8002 atau 8003) dan lakukan `get tes`. Data `123` harusnya masih ada dan konsisten.
+| Command | Example | Description |
+|---------|---------|-------------|
+| `ping` | `ping` | Check connection, output: `PONG` |
+| `set <key> <value>` | `set user1 john` | Store data with a key |
+| `get <key>` | `get user1` | Retrieve value from a key |
+| `append <key> <text>` | `append user1 _doe` | Append string to the value |
+| `strln <key>` | `strln user1` | Get the string length |
+| `del <key>` | `del user1` | Delete key and return its value |
 
 ---
 
-Troubleshooting
-Q: Error `Could not find or load main class`?
-A: Pastikan Anda menjalankan perintah dari root folder proyek dan perintah `mvn package` sudah sukses sebelumnya. Perhatikan pemisah classpath (`;` untuk Windows, `:` untuk Linux).
+## Troubleshooting
 
-Q: Error `NoClassDefFoundError: com/googlecode/jsonrpc4j/...`?
-A: Dependensi belum tersalin. Jalankan ulang `mvn dependency:copy-dependencies` dan pastikan folder `target/dependency` tidak kosong.
-
-Q: Client balasan null atau Timeout?
-A: Pastikan minimal 2 node server menyala. Raft membutuhkan mayoritas (2 dari 3 node) untuk memproses request `set` atau `append`.
-
-Q: Node Follower malah jadi Leader sendiri?
-A: Pastikan saat menjalankan Follower, Anda menyertakan alamat Leader (contact node) di argumen terakhir (contoh: `localhost 8001`). Jika tidak, node akan merasa sendirian dan mengangkat dirinya sendiri jadi Leader.
+| Error | Solution |
+|-------|----------|
+| `Could not find or load main class` | Run from the project root folder. Make sure `mvn compile` succeeded. Check classpath separator (`;` Windows, `:` Linux) |
+| `NoClassDefFoundError: com/googlecode/jsonrpc4j/...` | Run `mvn dependency:copy-dependencies` and ensure `target/dependency/` is not empty |
+| `Client timeout / null response` | Make sure at least 2 server nodes are running (Raft requires majority) |
+| `Follower Node becomes Leader on its own` | Make sure to include the contact node when starting a Follower |
 
 ---
 
-Jika Anda ingin, saya bisa:
-- Menambahkan skrip `.bat` atau `.sh` untuk menjalankan 3 node dan client otomatis.
-- Mengimplementasikan fitur redirect client agar client otomatis mengikuti leader.
+## Team Members - LabBrother
 
-Selamat mencoba!
-# Tugas Besar Sistem Paralel dan Terdistribusi 2025
+| Name | Student ID |
+|------|------------|
+| Jonatahan Kenan Budianto | 13523139 |
+| Mahesa Fadhillah Andre | 13523140 |
+| Anas Ghazi Al Gifari | 13523159 |
 
-# [Nama Kelompok] - [Kelas]
+## Feature Status
 
-## Anggota Kelompok
-
-| Nama           | NIM        |
-|----------------|------------|
-|    Anggota 1            |   NIM 1         |
-|    Anggota 2            |   NIM 2         |
-|    Anggota 3            |   NIM 3         |
-
-## Status Fitur
-<p>Note: status bisa (selesai, setengah jadi, blm selesai)</p><br/>
-
-| Fitur               | Status       |
-|---------------------|--------------|
-| Heartbeat          | blm selesai  |
-| Leader Election    | blm selesai  |
-| Log Replication    | blm selesai  |
-| Membership Change  | blm selesai  |
-| Unit Testing (bonus)| blm selesai  |
-| Transaction (bonus) | blm selesai  |
-| Log Compaciton (bonus)| blm selesai  |
-
+| Feature | Status |
+|---------|--------|
+| Heartbeat | Complete |
+| Leader Election | Complete |
+| Log Replication | Complete |
+| Membership Change | Complete |
+| Unit Testing (bonus) | Complete |
+| Transaction (bonus) | Complete |
+| Log Compaction (bonus) | Not Started |
