@@ -145,6 +145,11 @@ Once the Client is connected, type the following commands:
 | `append <key> <text>` | `append user1 _doe` | Append string to the value |
 | `strln <key>` | `strln user1` | Get the string length |
 | `del <key>` | `del user1` | Delete key and return its value |
+| `logs` | `logs` | Displays the log entries |
+| `begin` | `begin` | Start the transaction |
+| `commit` | `commit` | Commit the transaction |
+| `abort` | `abort` | Abort the transaction |
+| `exit` | `exit` | Exit the client application | 
 
 ---
 
@@ -177,4 +182,4 @@ Once the Client is connected, type the following commands:
 | Membership Change | Complete |
 | Unit Testing (bonus) | Complete |
 | Transaction (bonus) | Complete |
-| Log Compaction (bonus) | Not Started |
+| Log Compaction (bonus) | Complete |
